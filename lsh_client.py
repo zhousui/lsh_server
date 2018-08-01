@@ -1,5 +1,11 @@
 # -*- coding: utf8 -*-
 # ! /usr/bin/python
+
+'''
+#Change log:
+#2018-7-18   
+#128 dimension feature upgrade to 512 dimension feature
+'''
 import numpy as np
 
 import os
@@ -10,6 +16,7 @@ import time
 import msgpack
 import msgpack_numpy as m
 
+SUPPORT_FEATURE_DIMENSION = 512
 REQUEST_TIMEOUT = 2500
 REQUEST_RETRIES = 3
 
@@ -30,13 +37,29 @@ class Identifier:
         self.context.term()
 
     def search(self, emb_array, angle_x_array,angle_y_array):
+        if not isinstance(emb_array,np.ndarray):
+            raise TypeError('emb_array must be an instance of numpy.ndarray')
+        if len(emb_array.shape) != 2:
+            raise ValueError('emb_array must be a two-dimensional array')
+        #2018-7-18   
+        #128 dimension feature upgrade to 512 dimension feature
+        # if emb_array.shape[1] != 128:
+        if emb_array.shape[1] != SUPPORT_FEATURE_DIMENSION:
+            raise ValueError('emb_array dimension mismatch: {} expected, but {} found'.format(
+                    SUPPORT_FEATURE_DIMENSION, emb_array.shape[1]))
+        if emb_array.dtype != np.float64:
+            raise ValueError('data type of emb_array must be np.float64')
+        if type(angle_x_array)!=list or type(angle_y_array)!=list:
+            raise TypeError('angle_array must be list')
+        if len(emb_array) != len(angle_x_array) or len(emb_array) != len(angle_y_array):
+            raise ValueError('len of array must be same')
         # if angle_x > 30 or angle_y > 30:
         #     return None,None
         t1=time.time()
         #serialized = pickle.dumps(emb_array, protocol=0)
         serialized=msgpack.packb(emb_array, default=m.encode)
         t2=time.time()
-        print ("1111:%f"%(t2-t1))
+        print ("emb array pack cost time:%f"%(t2-t1))
         retries_left = REQUEST_RETRIES
         names = []
         pred = []
@@ -58,8 +81,8 @@ class Identifier:
                     #deserialized = pickle.loads(reply)
                     deserialized = msgpack.unpackb(reply, raw=False)
                     t2=time.time()
-                    print ("222:%f"%(t2-t1))
-                    print deserialized
+                    print ("msg unpack time:%f"%(t2-t1))
+                    #print deserialized
                     if not deserialized:
                         print "E: Malformed reply from server: %s" % reply
                         retries_left -= 1
@@ -92,31 +115,38 @@ class Identifier:
         #self.context.term()
         return names,pred
 
-f=np.load('50w.npy')
-l=np.load('labels_50w.npy')
+
+#DELETE FOR FEATURE DIMENSION CHANGE 2018-7-18
+
+f=np.load('../features.npy')
+l=np.load('../labels.npy')
 ie=Identifier('127.0.0.1','5555')
+#ie=Identifier('15.112.148.180','5556')
 # t1=time.time()
 # names,pred=ie.identifys(f[1000])
 # t2=time.time()
 # print t2-t1
 
-total=100
+#ie.search([1,2,3],[1,2,3],[1,3,4])
+
+total=10000
 accuracy = 0
 error=0
 st=time.time()
 for i in range(total):
     s=np.random.randint(0,f.shape[0])
-    t1=time.time();r=ie.search(f[s].reshape(1,128),[],[]);t2=time.time()
-    print ("searching No. %d,query %d,result:[%s],\ncost time:%f"%(i,s,",".join([str(x) for x in r]),t2-t1))
+    t1=time.time();r=ie.search(f[s].reshape(1,512),[1],[1]);t2=time.time()
+    print ("searching No. %d,query %d,query label: %s, result:[%s],\ncost time:%f"%(i,s,l[s],",".join([str(x) for x in r[0]]),t2-t1))
+    #print l[s]
     # if s == r[0]:
     #     accuracy1+=1
     if l[s] in r[0]:
         accuracy+=1
     else:
         error+=1
-        print ("FALSE ------ query index %d,return [%s]"%(s,",".join([str(x) for x in r])))
+        #print ("FALSE ------ query index %d,return [%s]"%(s,",".join([str(x) for x in r])))
 et=time.time()
-print ("Total:%d,total search time:%f,cost mean time:%f"%(total,et-st,(et-st)/total))
+print ("Total:%d,total search time:%f,Currency num:%f, cost mean time:%f"%(total,et-st,total/(et-st), (et-st)/total))
 print ("False count:%d,nearest_neighbor Accuracy rate: %f" %
 (error,accuracy / total))
 del ie
