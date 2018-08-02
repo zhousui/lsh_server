@@ -3,6 +3,7 @@
 '''
 ChangeLog:
 #2018-7-19 为工作线程加保护，避免异常情况下，无法响应
+#2018-08-02 根据Hash Server接口设计V1.0文档修改
 '''
 
 from __future__ import division
@@ -16,7 +17,7 @@ import pickle
 import collections
 import traceback
 import msgpack
-import msgpack_numpy as m
+# import msgpack_numpy as m
 
 import logging
 import logging.handlers
@@ -34,10 +35,11 @@ logger.addHandler(handler)  # 为logger添加handler
 logger.setLevel(logging.INFO)
 
 def getsimi(v1,v2):
-	if np.linalg.norm(v2-v1) <1.0:
-		return getcosine(v1,v2)
-	else:
-		return 0.0
+    # print np.linalg.norm(v2-v1)
+    if np.linalg.norm(v2-v1) <1.0:
+        return getcosine(v1,v2)
+    else:
+        return 0.0
 	
 def getcosine(v1,v2):
         cos_angle = ( np.dot(v1, v2) / ((np.linalg.norm(v1, 2) * np.linalg.norm(v2, 2))) + 1) / 2
@@ -117,10 +119,34 @@ class lsh_server:
         worker.connect(url_worker)
         while True:
             try:
+                errorcode = 0
                 message = worker.recv()
                 t1 = time.time()
                 #query = pickle.loads(message)
-                query_arr=msgpack.unpackb(message,object_hook=m.decode)
+                #2018-08-02 根据Hash Server接口设计V1.0文档修改
+                # query_arr=msgpack.unpackb(message,object_hook=m.decode)
+                search_arg=msgpack.unpackb(message,raw=False)
+                cmd=search_arg[0]
+                map_start=1
+                find_k=5
+                if cmd == 0x8001:
+                    map_start=1
+                elif cmd == 0x8002:
+                    find_k=search_arg[1]
+                    map_start=2
+                else:
+                    errorcode=-5
+                    raise ValueError("Invalid command")
+                query_arr=np.fromstring(search_arg[map_start]['data'],dtype=np.dtype(search_arg[map_start]['type'])).reshape(search_arg[map_start]['shape'])
+                h_angle=search_arg[map_start+1]
+                v_angle=search_arg[map_start+2] 
+                logger.debug ("cmd:%x, %s---%s" %( cmd, h_angle,  v_angle   ))          
+                if len(query_arr.shape) != 2:
+                    errorcode = -3
+                    raise ValueError('emb_array must be a two-dimensional array')
+                if len(query_arr) != len(h_angle) or len(query_arr) != len(v_angle):
+                    errorcode=-2
+                    raise ValueError('len of all array must be same')
                 # print query_arr
                 # print query_arr.dtype
                 t2 = time.time()
@@ -135,17 +161,25 @@ class lsh_server:
                     result=None
                     t1 = time.time()
                     # result = self.qo.find_nearest_neighbor(query)
-                    result = self.qp.find_nearest_neighbor(query)
-                    t2 = time.time()
-                    logger.debug ("\nresult:[%d],cost time:%f"%(result,t2-t1))
-                    names.append(self.label[result] if result != None else None)
-                    confidences.append(getsimi(query,self.feature[result]) if result != None else 0.0)
-                    #indexs.append(result)
+                    if cmd == 0x8001:
+                        result = self.qp.find_nearest_neighbor(query)
+                        t2 = time.time()
+                        logger.debug ("\nresult:[%d],cost time:%f"%(result,t2-t1))
+                        names.append(self.label[result] if result != None else None)
+                        confidences.append(getsimi(query,self.feature[result]) if result != None else 0.0)
+                    elif cmd == 0x8002:
+                        result = self.qp.find_k_nearest_neighbors(query,find_k)
+                        t2 = time.time()
+                        logger.debug ("\nresult:[%s],cost time:%f"%(",".join([str(x) for x in result]),t2-t1))
+                        for x in result:
+                            #print x                            
+                            names.append(self.label[x])
+                            confidences.append(getsimi(query,self.feature[x]))
                 te=time.time()
                 logger.debug ("Total compute time:%f,mean compute time:%f"%((te-ts),(te-ts)/len(query_arr)))
                 #print indexs
                 #name_confidence=self.construct_name_confidence(query_arr,indexs)
-                name_confidence=(names,confidences)
+                name_confidence=(errorcode,names,confidences)
                 t1 = time.time()
                 #serialized = pickle.dumps(name_confidence, protocol=0)
                 serialized=msgpack.packb(name_confidence,use_bin_type=True)
@@ -160,8 +194,15 @@ class lsh_server:
                 print ("e.message:\t%s"%e.message)
                 print ("trace info:\n%s" % traceback.format_exc())
                 #2018-7-19 为工作线程加保护，避免异常情况下，无法响应
-                # break
-                name_confidence=(['fatal error:'+e.message],[0.0])
+                # break 
+                if errorcode == 0:
+                    if e.message.find('query dimension mismatch') != -1:
+                        errorcode = -1
+                    elif e.message.find('dataset and query must have the same dtype') != -1:
+                        errorcode = -4
+                    else:
+                        errorcode = -1000               
+                name_confidence=(errorcode,['Fatal Error:'+e.message],[0.0])
                 serialized=msgpack.packb(name_confidence,use_bin_type=True)
                 worker.send(serialized)
         worker.close()

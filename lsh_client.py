@@ -17,6 +17,7 @@ import msgpack
 import msgpack_numpy as m
 
 SUPPORT_FEATURE_DIMENSION = 512
+TEST_CMD=0x8002
 REQUEST_TIMEOUT = 2500
 REQUEST_RETRIES = 3
 
@@ -57,7 +58,12 @@ class Identifier:
         #     return None,None
         t1=time.time()
         #serialized = pickle.dumps(emb_array, protocol=0)
-        serialized=msgpack.packb(emb_array, default=m.encode)
+        # serialized=msgpack.packb(emb_array, default=m.encode)
+        map_dic={'type':'<f8','shape':(1,512),'data':emb_array.tobytes()}
+        if TEST_CMD == 0x8001:
+            serialized=msgpack.packb((TEST_CMD,map_dic,angle_x_array,angle_y_array),use_bin_type=True)
+        elif TEST_CMD == 0x8002:
+            serialized=msgpack.packb((TEST_CMD,5,map_dic,angle_x_array,angle_y_array),use_bin_type=True)
         t2=time.time()
         print ("emb array pack cost time:%f"%(t2-t1))
         retries_left = REQUEST_RETRIES
@@ -82,15 +88,16 @@ class Identifier:
                     deserialized = msgpack.unpackb(reply, raw=False)
                     t2=time.time()
                     print ("msg unpack time:%f"%(t2-t1))
-                    #print deserialized
+                    print deserialized
                     if not deserialized:
                         print "E: Malformed reply from server: %s" % reply
                         retries_left -= 1
                     else:
                         #names,pred=deserialized
-                        names = deserialized[0]
-                        pred = deserialized[1]
-                        return deserialized[0],deserialized[1]
+                        errorcode=deserialized[0]
+                        names = deserialized[1]
+                        pred = deserialized[2]
+                        return names,pred
                         retries_left = 0
                         expect_reply = False
 
@@ -118,8 +125,8 @@ class Identifier:
 
 #DELETE FOR FEATURE DIMENSION CHANGE 2018-7-18
 
-f=np.load('../features.npy')
-l=np.load('../labels.npy')
+f=np.load('../datasets/50w-512d.npy')
+l=np.load('../datasets/labels-50w-512d.npy')
 ie=Identifier('127.0.0.1','5555')
 #ie=Identifier('15.112.148.180','5556')
 # t1=time.time()
@@ -129,13 +136,14 @@ ie=Identifier('127.0.0.1','5555')
 
 #ie.search([1,2,3],[1,2,3],[1,3,4])
 
-total=10000
+total=1
 accuracy = 0
 error=0
 st=time.time()
 for i in range(total):
     s=np.random.randint(0,f.shape[0])
-    t1=time.time();r=ie.search(f[s].reshape(1,512),[1],[1]);t2=time.time()
+    print ("searching query: %d"% s)
+    t1=time.time();r=ie.search(f[s].reshape(1,SUPPORT_FEATURE_DIMENSION),[1],[1]);t2=time.time()
     print ("searching No. %d,query %d,query label: %s, result:[%s],\ncost time:%f"%(i,s,l[s],",".join([str(x) for x in r[0]]),t2-t1))
     #print l[s]
     # if s == r[0]:
